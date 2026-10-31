@@ -18,6 +18,8 @@ namespace bitAudio
         private WasapiOut output;
         private BufferedWaveProvider captureBuffer;
         private GainLimiterSampleProvider processor;
+        private EqualizerSampleProvider equalizer;
+        private readonly float[] equalizerGains = new float[EqualizerSampleProvider.BandCount];
         private MMDevice captureDevice;
         private MMDevice playbackDevice;
 
@@ -74,6 +76,33 @@ namespace bitAudio
                 if (current != null)
                 {
                     current.LimiterEnabled = value;
+                }
+            }
+        }
+
+        public void SetEqualizerGains(float[] gains)
+        {
+            if (gains == null)
+            {
+                return;
+            }
+
+            lock (syncRoot)
+            {
+                int count = Math.Min(gains.Length, equalizerGains.Length);
+                for (int i = 0; i < count; i++)
+                {
+                    equalizerGains[i] = gains[i] < EqualizerSampleProvider.MinimumGainDb
+                        ? EqualizerSampleProvider.MinimumGainDb
+                        : gains[i] > EqualizerSampleProvider.MaximumGainDb
+                            ? EqualizerSampleProvider.MaximumGainDb
+                            : gains[i];
+                }
+
+                EqualizerSampleProvider current = equalizer;
+                if (current != null)
+                {
+                    current.SetGains(equalizerGains);
                 }
             }
         }
@@ -410,6 +439,8 @@ namespace bitAudio
                     }
 
                     samples = new ChannelMapperSampleProvider(samples, outputChannels);
+                    equalizer = new EqualizerSampleProvider(samples, equalizerGains);
+                    samples = equalizer;
                     processor = new GainLimiterSampleProvider(samples, gain, limiterEnabled);
                     ISampleProvider continuous = new ContinuousSampleProvider(processor);
 
@@ -542,6 +573,7 @@ namespace bitAudio
 
             captureBuffer = null;
             processor = null;
+            equalizer = null;
             trimBuffer = null;
         }
 

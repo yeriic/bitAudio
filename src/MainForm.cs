@@ -49,6 +49,22 @@ namespace bitAudio
         private LinkLabel cableLink;
         private NotifyIcon trayIcon;
         private ContextMenuStrip trayMenu;
+        private Button eqButton;
+        private EqualizerPanel eqPanel;
+        private Panel eqShiftSeparator;
+        private Label eqShiftTitle;
+        private Timer eqAnimationTimer;
+        private Stopwatch eqAnimationWatch;
+        private bool eqOpen;
+        private int eqClosedClientHeight;
+        private int eqExtraHeight;
+        private int eqAnimationStartHeight;
+        private int eqAnimationEndHeight;
+        private int eqAnimationStartAmpTop;
+        private int eqAnimationEndAmpTop;
+        private int eqAnimationStartFormHeight;
+        private int eqAnimationEndFormHeight;
+        private const int EqTop = 216;
 
         private List<AudioDeviceInfo> inputDevices = new List<AudioDeviceInfo>();
         private List<AudioDeviceInfo> outputDevices = new List<AudioDeviceInfo>();
@@ -93,6 +109,15 @@ namespace bitAudio
             suppressUiEvents = false;
             engine.Gain = savedGain / 100f;
             UpdateGainDisplay();
+
+            engine.SetEqualizerGains(eqPanel.Gains);
+            eqPanel.GainsChanged += HandleEqGainsChanged;
+            eqPanel.StatusMessage += HandleEqStatusMessage;
+
+            eqAnimationTimer = new Timer();
+            eqAnimationTimer.Interval = 15;
+            eqAnimationTimer.Tick += HandleEqAnimationTick;
+            eqAnimationWatch = new Stopwatch();
 
             engine.StatusChanged += HandleEngineStatus;
             engine.ErrorOccurred += HandleEngineError;
@@ -315,10 +340,14 @@ namespace bitAudio
             soundButton.Click += HandleSoundClick;
             panel.Controls.Add(soundButton);
 
+            eqButton = CreateButton("EQ", 330, 142, 70, 30);
+            eqButton.Click += delegate { ToggleEqualizer(); };
+            panel.Controls.Add(eqButton);
+
             cableLink = new LinkLabel();
             cableLink.Text = "Instalar VB-CABLE";
             cableLink.AutoSize = true;
-            cableLink.Location = new Point(330, 148);
+            cableLink.Location = new Point(414, 148);
             cableLink.LinkColor = AccentColor;
             cableLink.ActiveLinkColor = TextColor;
             cableLink.VisitedLinkColor = AccentColor;
@@ -340,9 +369,17 @@ namespace bitAudio
 
             Panel separator = CreateSeparator(20, 216, 820);
             panel.Controls.Add(separator);
+            eqShiftSeparator = separator;
 
             Label boostTitle = CreateSectionLabel("Amplificación", 20, 228);
             panel.Controls.Add(boostTitle);
+            eqShiftTitle = boostTitle;
+
+            eqPanel = new EqualizerPanel();
+            eqPanel.Location = new Point(20, EqTop);
+            eqPanel.Size = new Size(820, 0);
+            eqPanel.Visible = false;
+            panel.Controls.Add(eqPanel);
 
             gainValueLabel = new Label();
             gainValueLabel.Text = "100 %  (0.0 dB)";
@@ -377,11 +414,202 @@ namespace bitAudio
                 inputCombo.Width = width;
                 destinationCombo.Width = width;
                 hintLabel.Width = width;
+                eqPanel.Width = width;
                 gainSlider.Width = width;
                 separator.Width = width;
             };
 
             return panel;
+        }
+
+        private void ToggleEqualizer()
+        {
+            if (eqAnimationTimer == null || eqAnimationTimer.Enabled)
+            {
+                return;
+            }
+
+            if (eqOpen)
+            {
+                CloseEqualizer();
+            }
+            else
+            {
+                OpenEqualizer();
+            }
+        }
+
+        private void OpenEqualizer()
+        {
+            eqOpen = true;
+            UpdateEqButtonAppearance();
+            eqClosedClientHeight = ClientSize.Height;
+
+            int panelHeight = EqualizerPanel.PanelHeight;
+            int amplificationBottom = EqTop + 84 + limiterCheck.Height;
+            int emptySpace = entradaPanel.ClientSize.Height - amplificationBottom;
+            if (emptySpace < 0)
+            {
+                emptySpace = 0;
+            }
+
+            int extra = panelHeight - emptySpace + 12;
+            if (extra < 0)
+            {
+                extra = 0;
+            }
+
+            int nonClientHeight = Height - ClientSize.Height;
+            int maxClientHeight = Screen.FromControl(this).WorkingArea.Height - nonClientHeight - 12;
+            if (eqClosedClientHeight + extra > maxClientHeight)
+            {
+                extra = Math.Max(0, maxClientHeight - eqClosedClientHeight);
+            }
+
+            eqExtraHeight = extra;
+            eqPanel.Visible = true;
+            eqPanel.Height = 0;
+            ShiftAmplification(0);
+            StartEqAnimation(0, panelHeight, 0, panelHeight, eqClosedClientHeight, eqClosedClientHeight + extra);
+        }
+
+        private void CloseEqualizer()
+        {
+            eqOpen = false;
+            UpdateEqButtonAppearance();
+
+            int startHeight = eqPanel.Height;
+            int targetFormHeight = ClientSize.Height - eqExtraHeight;
+            if (targetFormHeight < 320)
+            {
+                targetFormHeight = 320;
+            }
+
+            StartEqAnimation(startHeight, 0, startHeight, 0, ClientSize.Height, targetFormHeight);
+        }
+
+        private void StartEqAnimation(
+            int startHeight,
+            int endHeight,
+            int startShift,
+            int endShift,
+            int startFormHeight,
+            int endFormHeight)
+        {
+            eqAnimationStartHeight = startHeight;
+            eqAnimationEndHeight = endHeight;
+            eqAnimationStartAmpTop = startShift;
+            eqAnimationEndAmpTop = endShift;
+            eqAnimationStartFormHeight = startFormHeight;
+            eqAnimationEndFormHeight = endFormHeight;
+
+            eqAnimationWatch.Reset();
+            eqAnimationWatch.Start();
+            eqAnimationTimer.Start();
+        }
+
+        private void HandleEqAnimationTick(object sender, EventArgs e)
+        {
+            double progress = (double)eqAnimationWatch.ElapsedMilliseconds / 220.0;
+            if (progress > 1.0)
+            {
+                progress = 1.0;
+            }
+            double eased = 1.0 - Math.Pow(1.0 - progress, 3.0);
+
+            int height = eqAnimationStartHeight + (int)Math.Round((eqAnimationEndHeight - eqAnimationStartHeight) * eased);
+            int shift = eqAnimationStartAmpTop + (int)Math.Round((eqAnimationEndAmpTop - eqAnimationStartAmpTop) * eased);
+            int formHeight = eqAnimationStartFormHeight + (int)Math.Round((eqAnimationEndFormHeight - eqAnimationStartFormHeight) * eased);
+
+            eqPanel.Height = height;
+            ShiftAmplification(shift);
+            if (ClientSize.Height != formHeight)
+            {
+                ClientSize = new Size(ClientSize.Width, formHeight);
+            }
+
+            if (progress < 1.0)
+            {
+                return;
+            }
+
+            eqAnimationTimer.Stop();
+            eqAnimationWatch.Reset();
+
+            if (eqOpen)
+            {
+                eqPanel.Height = EqualizerPanel.PanelHeight;
+                ShiftAmplification(EqualizerPanel.PanelHeight);
+            }
+            else
+            {
+                eqPanel.Visible = false;
+                eqPanel.Height = 0;
+                ShiftAmplification(0);
+            }
+
+            if (ClientSize.Height != eqAnimationEndFormHeight)
+            {
+                ClientSize = new Size(ClientSize.Width, eqAnimationEndFormHeight);
+            }
+        }
+
+        private void ShiftAmplification(int offset)
+        {
+            if (eqShiftSeparator != null)
+            {
+                eqShiftSeparator.Top = EqTop + offset;
+            }
+            if (eqShiftTitle != null)
+            {
+                eqShiftTitle.Top = EqTop + 12 + offset;
+            }
+            if (gainValueLabel != null)
+            {
+                gainValueLabel.Top = EqTop + 12 + offset;
+            }
+            if (gainSlider != null)
+            {
+                gainSlider.Top = EqTop + 40 + offset;
+            }
+            if (limiterCheck != null)
+            {
+                limiterCheck.Top = EqTop + 84 + offset;
+            }
+        }
+
+        private void UpdateEqButtonAppearance()
+        {
+            if (eqButton == null)
+            {
+                return;
+            }
+
+            if (eqOpen)
+            {
+                eqButton.BackColor = AccentColor;
+                eqButton.ForeColor = Color.FromArgb(16, 34, 34);
+                eqButton.FlatAppearance.BorderColor = AccentColor;
+            }
+            else
+            {
+                eqButton.BackColor = InputColor;
+                eqButton.ForeColor = TextColor;
+                eqButton.FlatAppearance.BorderColor = ButtonBorderColor;
+            }
+        }
+
+        private void HandleEqGainsChanged(object sender, EventArgs e)
+        {
+            if (eqPanel != null)
+            {
+                engine.SetEqualizerGains(eqPanel.Gains);
+            }
+        }
+
+        private void HandleEqStatusMessage(string message)
+        {
+            ShowStatus(message, MutedColor);
         }
 
         private Panel BuildSettingsPanel()
@@ -724,16 +952,24 @@ namespace bitAudio
                 return;
             }
 
-            closing = true;
-            syncTimer.Stop();
-            try
-            {
-                engine.Stop();
-            }
-            catch (Exception)
-            {
-            }
-            engine.Dispose();
+                closing = true;
+                syncTimer.Stop();
+                if (eqAnimationTimer != null)
+                {
+                    eqAnimationTimer.Stop();
+                }
+                if (eqPanel != null)
+                {
+                    eqPanel.SaveState();
+                }
+                try
+                {
+                    engine.Stop();
+                }
+                catch (Exception)
+                {
+                }
+                engine.Dispose();
 
             if (trayIcon != null)
             {
@@ -1264,7 +1500,7 @@ namespace bitAudio
             string db;
             if (percent <= 0)
             {
-                db = "−∞ dB";
+                db = "\u2212\u221E dB";
             }
             else
             {
