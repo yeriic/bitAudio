@@ -33,6 +33,7 @@ if not exist "%CSC%" (
  src\Audio\ChannelMapperSampleProvider.cs ^
  src\Audio\ContinuousSampleProvider.cs ^
  src\Audio\EqualizerSampleProvider.cs ^
+ src\Audio\MonitorTapSampleProvider.cs ^
  src\Controls\SlimSlider.cs ^
  src\Controls\VerticalEqSlider.cs ^
  src\Controls\EqualizerPanel.cs ^

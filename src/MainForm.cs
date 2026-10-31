@@ -33,7 +33,6 @@ namespace bitAudio
         private Button tabEntradaButton;
         private Button tabSalidaButton;
         private Button tabAjustesButton;
-        private Label hintLabel;
         private ComboBox inputCombo;
         private ComboBox destinationCombo;
         private ComboBox outputCombo;
@@ -64,7 +63,7 @@ namespace bitAudio
         private int eqAnimationEndAmpTop;
         private int eqAnimationStartFormHeight;
         private int eqAnimationEndFormHeight;
-        private const int EqTop = 216;
+        private const int EqTop = 184;
 
         private List<AudioDeviceInfo> inputDevices = new List<AudioDeviceInfo>();
         private List<AudioDeviceInfo> outputDevices = new List<AudioDeviceInfo>();
@@ -113,6 +112,7 @@ namespace bitAudio
             engine.SetEqualizerGains(eqPanel.Gains);
             eqPanel.GainsChanged += HandleEqGainsChanged;
             eqPanel.StatusMessage += HandleEqStatusMessage;
+            eqPanel.MonitoringToggleRequested += HandleMonitoringToggleRequested;
 
             eqAnimationTimer = new Timer();
             eqAnimationTimer.Interval = 15;
@@ -357,21 +357,11 @@ namespace bitAudio
             cableLink.LinkClicked += HandleCableLinkClicked;
             panel.Controls.Add(cableLink);
 
-            hintLabel = new Label();
-            hintLabel.Location = new Point(20, 184);
-            hintLabel.Size = new Size(820, 20);
-            hintLabel.Font = new Font("Segoe UI", 9F);
-            hintLabel.ForeColor = MutedColor;
-            hintLabel.TextAlign = ContentAlignment.MiddleLeft;
-            hintLabel.AutoEllipsis = true;
-            hintLabel.Visible = false;
-            panel.Controls.Add(hintLabel);
-
-            Panel separator = CreateSeparator(20, 216, 820);
+            Panel separator = CreateSeparator(20, EqTop, 820);
             panel.Controls.Add(separator);
             eqShiftSeparator = separator;
 
-            Label boostTitle = CreateSectionLabel("Amplificación", 20, 228);
+            Label boostTitle = CreateSectionLabel("Amplificación", 20, EqTop + 12);
             panel.Controls.Add(boostTitle);
             eqShiftTitle = boostTitle;
 
@@ -386,10 +376,10 @@ namespace bitAudio
             gainValueLabel.Font = new Font("Segoe UI Semibold", 10.5F);
             gainValueLabel.ForeColor = AccentColor;
             gainValueLabel.AutoSize = true;
-            gainValueLabel.Location = new Point(196, 228);
+            gainValueLabel.Location = new Point(196, EqTop + 12);
             panel.Controls.Add(gainValueLabel);
 
-            gainSlider = CreateSlider(20, 256, 820, 0, 400, 5, 25);
+            gainSlider = CreateSlider(20, EqTop + 40, 820, 0, 400, 5, 25);
             gainSlider.Value = 100;
             gainSlider.ValueChanged += HandleGainChanged;
             panel.Controls.Add(gainSlider);
@@ -397,7 +387,7 @@ namespace bitAudio
             limiterCheck = new CheckBox();
             limiterCheck.Text = "Limitador de picos";
             limiterCheck.AutoSize = true;
-            limiterCheck.Location = new Point(20, 300);
+            limiterCheck.Location = new Point(20, EqTop + 84);
             limiterCheck.ForeColor = TextColor;
             limiterCheck.BackColor = CardColor;
             limiterCheck.Checked = true;
@@ -413,7 +403,6 @@ namespace bitAudio
                 }
                 inputCombo.Width = width;
                 destinationCombo.Width = width;
-                hintLabel.Width = width;
                 eqPanel.Width = width;
                 gainSlider.Width = width;
                 separator.Width = width;
@@ -477,6 +466,18 @@ namespace bitAudio
         {
             eqOpen = false;
             UpdateEqButtonAppearance();
+
+            if (eqPanel.IsMonitoring)
+            {
+                try
+                {
+                    engine.StopMonitoring();
+                }
+                catch (Exception)
+                {
+                }
+                eqPanel.SetMonitoringState(false);
+            }
 
             int startHeight = eqPanel.Height;
             int targetFormHeight = ClientSize.Height - eqExtraHeight;
@@ -1034,6 +1035,18 @@ namespace bitAudio
                 return;
             }
 
+            if (eqPanel != null && eqPanel.IsMonitoring)
+            {
+                try
+                {
+                    engine.StopMonitoring();
+                }
+                catch (Exception)
+                {
+                }
+                eqPanel.SetMonitoringState(false);
+            }
+
             hidingToTray = true;
             try
             {
@@ -1341,6 +1354,33 @@ namespace bitAudio
             }
 
             SyncOutputVolume();
+
+            if (engine.IsRunning && eqPanel != null && eqPanel.IsMonitoring)
+            {
+                if (info == null)
+                {
+                    try
+                    {
+                        engine.StopMonitoring();
+                    }
+                    catch (Exception)
+                    {
+                    }
+                    eqPanel.SetMonitoringState(false);
+                }
+                else
+                {
+                    try
+                    {
+                        engine.StartMonitoring(info.Id);
+                    }
+                    catch (Exception exception)
+                    {
+                        eqPanel.SetMonitoringState(false);
+                        ShowStatus("Monitor de micrófono: " + exception.Message, WarningColor);
+                    }
+                }
+            }
         }
 
         private void HandleLimiterChanged(object sender, EventArgs e)
@@ -1358,6 +1398,10 @@ namespace bitAudio
 
             if (input == null)
             {
+                if (eqPanel.IsMonitoring)
+                {
+                    eqPanel.SetMonitoringState(false);
+                }
                 SelectTab(0);
                 ShowStatus("Selecciona tu micrófono.", WarningColor);
                 return;
@@ -1365,6 +1409,10 @@ namespace bitAudio
 
             if (destination == null)
             {
+                if (eqPanel.IsMonitoring)
+                {
+                    eqPanel.SetMonitoringState(false);
+                }
                 SelectTab(0);
                 ShowStatus("No activo.", MutedColor);
                 return;
@@ -1372,6 +1420,10 @@ namespace bitAudio
 
             if (AudioDeviceInfo.IsCableCaptureName(input.Name) && AudioDeviceInfo.IsCableRenderName(destination.Name))
             {
+                if (eqPanel.IsMonitoring)
+                {
+                    eqPanel.SetMonitoringState(false);
+                }
                 ShowStatus("Selecciona un micrófono real, no CABLE Output.", ErrorColor);
                 return;
             }
@@ -1389,10 +1441,74 @@ namespace bitAudio
                     latency);
 
                 UpdateActiveStatus();
+
+                if (eqPanel.IsMonitoring)
+                {
+                    AudioDeviceInfo monitorOutput = outputCombo.SelectedItem as AudioDeviceInfo;
+                    if (monitorOutput == null)
+                    {
+                        eqPanel.SetMonitoringState(false);
+                    }
+                    else
+                    {
+                        try
+                        {
+                            engine.StartMonitoring(monitorOutput.Id);
+                        }
+                        catch (Exception monitorException)
+                        {
+                            eqPanel.SetMonitoringState(false);
+                            ShowStatus("Monitor de micrófono: " + monitorException.Message, WarningColor);
+                        }
+                    }
+                }
             }
             catch (Exception exception)
             {
+                eqPanel.SetMonitoringState(false);
                 ShowStatus("No se pudo iniciar: " + exception.Message, ErrorColor);
+            }
+        }
+
+        private void HandleMonitoringToggleRequested(object sender, EventArgs e)
+        {
+            if (!eqPanel.IsMonitoring)
+            {
+                try
+                {
+                    engine.StopMonitoring();
+                }
+                catch (Exception)
+                {
+                }
+                ShowStatus("Monitor de micrófono apagado.", MutedColor);
+                return;
+            }
+
+            if (!engine.IsRunning)
+            {
+                eqPanel.SetMonitoringState(false);
+                ShowStatus("El monitor necesita el procesamiento activo.", WarningColor);
+                return;
+            }
+
+            AudioDeviceInfo output = outputCombo.SelectedItem as AudioDeviceInfo;
+            if (output == null)
+            {
+                eqPanel.SetMonitoringState(false);
+                ShowStatus("Selecciona una salida en la pestaña Salida.", WarningColor);
+                return;
+            }
+
+            try
+            {
+                engine.StartMonitoring(output.Id);
+                ShowStatus("Escuchando el micrófono procesado. Usa auriculares.", WarningColor);
+            }
+            catch (Exception exception)
+            {
+                eqPanel.SetMonitoringState(false);
+                ShowStatus("No se pudo escuchar el micrófono: " + exception.Message, ErrorColor);
             }
         }
 
@@ -1587,23 +1703,12 @@ namespace bitAudio
 
         private void UpdateHint()
         {
-            if (hintLabel == null || IsDisposed)
+            if (cableLink == null || IsDisposed)
             {
                 return;
             }
 
-            bool hasDestination = destinationDevices.Count > 0;
-            hintLabel.Visible = !hasDestination;
-            if (cableLink != null)
-            {
-                cableLink.Visible = !hasDestination;
-            }
-
-            if (!hasDestination)
-            {
-                hintLabel.ForeColor = ErrorColor;
-                hintLabel.Text = "⚠ VB-CABLE no detectado.";
-            }
+            cableLink.Visible = destinationDevices.Count == 0;
         }
 
         private static void HandleComboDrawItem(object sender, DrawItemEventArgs e)
@@ -1676,6 +1781,11 @@ namespace bitAudio
             }
             catch (Exception)
             {
+            }
+
+            if (eqPanel != null && eqPanel.IsMonitoring)
+            {
+                eqPanel.SetMonitoringState(false);
             }
 
             ShowStatus(message, ErrorColor);

@@ -32,17 +32,33 @@ namespace bitAudio.Controls
         private readonly Panel[] bandPanels;
         private readonly EqProfile personalProfile;
         private readonly ComboBox profileCombo;
+        private readonly Button resetButton;
+        private readonly Button listenButton;
         private readonly Button saveButton;
         private readonly Panel bandsHost;
         private readonly Timer saveTimer;
+        private readonly ToolTip toolTip;
 
         private string activeProfileName = "Plano";
         private bool suppressSliderEvents;
         private bool suppressProfileEvents;
         private bool stateDirty;
+        private bool monitoring;
 
         public event EventHandler GainsChanged;
+        public event EventHandler MonitoringToggleRequested;
         public event Action<string> StatusMessage;
+
+        public bool IsMonitoring
+        {
+            get { return monitoring; }
+        }
+
+        public void SetMonitoringState(bool enabled)
+        {
+            monitoring = enabled;
+            UpdateListenButtonAppearance();
+        }
 
         public EqualizerPanel()
         {
@@ -70,21 +86,27 @@ namespace bitAudio.Controls
             topLine.BackColor = SeparatorColor;
             Controls.Add(topLine);
 
-            Label title = new Label();
-            title.Text = "Ecualizador";
-            title.Font = new Font("Segoe UI Semibold", 9.5F);
-            title.ForeColor = TextColor;
-            title.AutoSize = true;
-            title.Location = new Point(0, 11);
-            Controls.Add(title);
-
-            profileCombo = CreateCombo(90, 6, 190);
+            profileCombo = CreateCombo(0, 6, 180);
             profileCombo.SelectedIndexChanged += HandleProfileChanged;
             Controls.Add(profileCombo);
 
-            saveButton = CreateButton("Guardar", 292, 4, 100, 27);
+            resetButton = CreateButton("Reiniciar", 188, 4, 88, 27);
+            resetButton.Click += HandleResetClick;
+            Controls.Add(resetButton);
+
+            listenButton = CreateButton("Escuchar", 284, 4, 92, 27);
+            listenButton.Click += HandleListenClick;
+            Controls.Add(listenButton);
+
+            saveButton = CreateButton("Guardar", 384, 4, 88, 27);
             saveButton.Click += HandleSaveClick;
             Controls.Add(saveButton);
+
+            toolTip = new ToolTip();
+            toolTip.SetToolTip(resetButton, "Volver al perfil Plano.");
+            toolTip.SetToolTip(listenButton, "Escuchar el micrófono procesado. Usa auriculares.");
+            toolTip.SetToolTip(saveButton, "Guardar este ecualizador como perfil.");
+            UpdateListenButtonAppearance();
 
             bandsHost = new Panel();
             bandsHost.Location = new Point(0, 38);
@@ -441,6 +463,61 @@ namespace bitAudio.Controls
             ApplyGainsToUi(target);
             RaiseGainsChanged();
             MarkStateDirty();
+        }
+
+        private void HandleResetClick(object sender, EventArgs e)
+        {
+            EqProfile flat = FindProfile("Plano");
+            if (flat == null)
+            {
+                return;
+            }
+
+            activeProfileName = flat.Name;
+            ApplyGainsToUi(flat.Gains);
+
+            suppressProfileEvents = true;
+            profileCombo.SelectedItem = flat;
+            suppressProfileEvents = false;
+
+            RaiseGainsChanged();
+            MarkStateDirty();
+            RaiseStatusMessage("EQ reiniciado a Plano.");
+        }
+
+        private void HandleListenClick(object sender, EventArgs e)
+        {
+            monitoring = !monitoring;
+            UpdateListenButtonAppearance();
+
+            EventHandler handler = MonitoringToggleRequested;
+            if (handler != null)
+            {
+                handler(this, EventArgs.Empty);
+            }
+        }
+
+        private void UpdateListenButtonAppearance()
+        {
+            if (listenButton == null)
+            {
+                return;
+            }
+
+            if (monitoring)
+            {
+                listenButton.Text = "Escuchando";
+                listenButton.BackColor = AccentColor;
+                listenButton.ForeColor = Color.FromArgb(16, 34, 34);
+                listenButton.FlatAppearance.BorderColor = AccentColor;
+            }
+            else
+            {
+                listenButton.Text = "Escuchar";
+                listenButton.BackColor = InputColor;
+                listenButton.ForeColor = TextColor;
+                listenButton.FlatAppearance.BorderColor = ButtonBorderColor;
+            }
         }
 
         private void HandleSaveClick(object sender, EventArgs e)
