@@ -18,7 +18,7 @@ namespace bitAudio.Controls
         {
             minimumDb = -80;
             maximumDb = 0;
-            valueDb = -60;
+            valueDb = -80;
             levelDb = -90f;
 
             SetStyle(

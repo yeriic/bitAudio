@@ -262,13 +262,13 @@ namespace bitAudio
             {
                 if (key == null)
                 {
-                    return -60;
+                    return -80;
                 }
 
                 object value = key.GetValue(NoiseGateValueName);
                 if (value == null)
                 {
-                    return -60;
+                    return -80;
                 }
 
                 try
@@ -286,7 +286,7 @@ namespace bitAudio
                 }
                 catch (Exception)
                 {
-                    return -60;
+                    return -80;
                 }
             }
         }

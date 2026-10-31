@@ -131,7 +131,7 @@ namespace bitAudio
             noiseGateBar.ValueDb = savedNoiseGate;
             suppressNoiseGateEvents = false;
             engine.SetNoiseGateThreshold(savedNoiseGate);
-            noiseGateValueLabel.Text = "Umbral " + savedNoiseGate + " dB";
+            UpdateNoiseGateThresholdLabel(savedNoiseGate);
 
             meterTimer = new Timer();
             meterTimer.Interval = 50;
@@ -415,13 +415,13 @@ namespace bitAudio
             noiseSeparator = CreateSeparator(20, EqTop + 128, 820);
             panel.Controls.Add(noiseSeparator);
 
-            noiseTitle = CreateSectionLabel("Cancelación de ruido", 20, EqTop + 140);
+            noiseTitle = CreateSectionLabel("Reducción de ruido", 20, EqTop + 140);
             panel.Controls.Add(noiseTitle);
 
             noiseGateValueLabel = new Label();
-            noiseGateValueLabel.Text = "Umbral -60 dB";
+            noiseGateValueLabel.Text = "Apagado";
             noiseGateValueLabel.Font = new Font("Segoe UI Semibold", 9.5F);
-            noiseGateValueLabel.ForeColor = AccentColor;
+            noiseGateValueLabel.ForeColor = MutedColor;
             noiseGateValueLabel.AutoSize = true;
             noiseGateValueLabel.Location = new Point(240, EqTop + 140);
             panel.Controls.Add(noiseGateValueLabel);
@@ -1735,7 +1735,26 @@ namespace bitAudio
             catch (Exception)
             {
             }
-            noiseGateValueLabel.Text = "Umbral " + db + " dB";
+            UpdateNoiseGateThresholdLabel(db);
+        }
+
+        private void UpdateNoiseGateThresholdLabel(int db)
+        {
+            if (noiseGateValueLabel == null)
+            {
+                return;
+            }
+
+            if (db <= NoiseGateSampleProvider.MinimumThresholdDb)
+            {
+                noiseGateValueLabel.Text = "Apagado";
+                noiseGateValueLabel.ForeColor = MutedColor;
+            }
+            else
+            {
+                noiseGateValueLabel.Text = "Umbral " + db + " dB";
+                noiseGateValueLabel.ForeColor = AccentColor;
+            }
         }
 
         private static string FormatNoiseLevel(float db)

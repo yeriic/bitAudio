@@ -20,7 +20,7 @@ namespace bitAudio
         private GainLimiterSampleProvider processor;
         private EqualizerSampleProvider equalizer;
         private NoiseGateSampleProvider noiseGate;
-        private volatile int noiseGateThresholdDb = -60;
+        private volatile int noiseGateThresholdDb = -80;
         private MonitorTapSampleProvider monitorTap;
         private BufferedWaveProvider monitorBuffer;
         private WasapiOut monitorOutput;

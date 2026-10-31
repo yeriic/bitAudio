@@ -8,6 +8,10 @@ namespace bitAudio
         public const int MinimumThresholdDb = -80;
         public const int MaximumThresholdDb = 0;
 
+        private const double KneeDb = 6.0;
+        private const double ExpansionRatio = 3.0;
+        private const double FloorGainDb = -36.0;
+
         private readonly ISampleProvider source;
         private readonly int channels;
         private readonly float attackCoefficient;
@@ -17,8 +21,7 @@ namespace bitAudio
         private volatile int thresholdDb;
         private volatile float levelDb = -90f;
         private float envelope;
-        private float gateGain = 1f;
-        private bool gateOpen = true;
+        private float smoothGain = 1f;
 
         public NoiseGateSampleProvider(ISampleProvider source, int initialThresholdDb)
         {
@@ -31,9 +34,9 @@ namespace bitAudio
             channels = source.WaveFormat.Channels;
 
             double sampleRate = source.WaveFormat.SampleRate;
-            attackCoefficient = AttackCoefficient(0.005, sampleRate);
-            releaseCoefficient = AttackCoefficient(0.150, sampleRate);
-            envelopeReleaseCoefficient = AttackCoefficient(0.250, sampleRate);
+            attackCoefficient = TimeCoefficient(0.010, sampleRate);
+            releaseCoefficient = TimeCoefficient(0.220, sampleRate);
+            envelopeReleaseCoefficient = TimeCoefficient(0.100, sampleRate);
 
             SetThreshold(initialThresholdDb);
         }
@@ -76,12 +79,16 @@ namespace bitAudio
             }
 
             int frames = read / channels;
-            double threshold = Math.Pow(10.0, thresholdDb / 20.0);
-            double closeThreshold = threshold * 0.5;
+            int threshold = thresholdDb;
+            bool active = threshold > MinimumThresholdDb;
+
+            double thresholdAt = threshold;
+            double lowerKnee = thresholdAt - KneeDb / 2.0;
+            double upperKnee = thresholdAt + KneeDb / 2.0;
+            double lowerKneeGainDb = -(KneeDb / 2.0) * (ExpansionRatio - 1.0);
 
             float currentEnvelope = envelope;
-            float currentGain = gateGain;
-            bool currentOpen = gateOpen;
+            float currentGain = smoothGain;
 
             for (int frame = 0; frame < frames; frame++)
             {
@@ -106,24 +113,31 @@ namespace bitAudio
                     currentEnvelope += (peak - currentEnvelope) * envelopeReleaseCoefficient;
                 }
 
-                if (currentOpen)
+                float targetGain = 1f;
+                if (active)
                 {
-                    if (currentEnvelope < closeThreshold)
+                    double level = 20.0 * Math.Log10(Math.Max(currentEnvelope, 0.000001));
+                    double gainDb;
+
+                    if (level >= upperKnee)
                     {
-                        currentOpen = false;
+                        gainDb = 0.0;
                     }
-                }
-                else
-                {
-                    if (currentEnvelope >= threshold)
+                    else if (level <= lowerKnee)
                     {
-                        currentOpen = true;
+                        gainDb = Math.Max(FloorGainDb, (level - thresholdAt) * (ExpansionRatio - 1.0));
                     }
+                    else
+                    {
+                        double position = (level - lowerKnee) / KneeDb;
+                        gainDb = lowerKneeGainDb * (1.0 - position);
+                    }
+
+                    targetGain = (float)Math.Pow(10.0, gainDb / 20.0);
                 }
 
-                float target = currentOpen ? 1f : 0f;
-                float coefficient = target > currentGain ? attackCoefficient : releaseCoefficient;
-                currentGain += (target - currentGain) * coefficient;
+                float coefficient = targetGain > currentGain ? attackCoefficient : releaseCoefficient;
+                currentGain += (targetGain - currentGain) * coefficient;
 
                 for (int channel = 0; channel < channels; channel++)
                 {
@@ -132,8 +146,7 @@ namespace bitAudio
             }
 
             envelope = currentEnvelope;
-            gateGain = currentGain;
-            gateOpen = currentOpen;
+            smoothGain = currentGain;
 
             double display = 20.0 * Math.Log10(Math.Max(currentEnvelope, 0.000001));
             if (display < -90.0)
@@ -149,7 +162,7 @@ namespace bitAudio
             return read;
         }
 
-        private static float AttackCoefficient(double milliseconds, double sampleRate)
+        private static float TimeCoefficient(double milliseconds, double sampleRate)
         {
             double samples = Math.Max(1.0, sampleRate * milliseconds / 1000.0);
             return (float)(1.0 - Math.Exp(-1.0 / samples));
