@@ -34,10 +34,12 @@ if not exist "%CSC%" (
  src\Audio\ContinuousSampleProvider.cs ^
  src\Audio\EqualizerSampleProvider.cs ^
  src\Audio\MonitorTapSampleProvider.cs ^
+ src\Audio\NoiseGateSampleProvider.cs ^
  src\Controls\SlimSlider.cs ^
  src\Controls\VerticalEqSlider.cs ^
  src\Controls\EqualizerPanel.cs ^
- src\Controls\ProfileNameDialog.cs
+ src\Controls\ProfileNameDialog.cs ^
+ src\Controls\NoiseGateBar.cs
 
 if errorlevel 1 (
   echo.

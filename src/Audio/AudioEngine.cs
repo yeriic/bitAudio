@@ -19,6 +19,8 @@ namespace bitAudio
         private BufferedWaveProvider captureBuffer;
         private GainLimiterSampleProvider processor;
         private EqualizerSampleProvider equalizer;
+        private NoiseGateSampleProvider noiseGate;
+        private volatile int noiseGateThresholdDb = -60;
         private MonitorTapSampleProvider monitorTap;
         private BufferedWaveProvider monitorBuffer;
         private WasapiOut monitorOutput;
@@ -115,6 +117,37 @@ namespace bitAudio
         public bool IsMonitoring
         {
             get { return monitoring; }
+        }
+
+        public float InputLevelDb
+        {
+            get
+            {
+                NoiseGateSampleProvider current = noiseGate;
+                return current != null ? current.LevelDb : -90f;
+            }
+        }
+
+        public void SetNoiseGateThreshold(int thresholdDb)
+        {
+            lock (syncRoot)
+            {
+                if (thresholdDb < NoiseGateSampleProvider.MinimumThresholdDb)
+                {
+                    thresholdDb = NoiseGateSampleProvider.MinimumThresholdDb;
+                }
+                else if (thresholdDb > NoiseGateSampleProvider.MaximumThresholdDb)
+                {
+                    thresholdDb = NoiseGateSampleProvider.MaximumThresholdDb;
+                }
+
+                noiseGateThresholdDb = thresholdDb;
+                NoiseGateSampleProvider current = noiseGate;
+                if (current != null)
+                {
+                    current.SetThreshold(thresholdDb);
+                }
+            }
         }
 
         public void StartMonitoring(string outputDeviceId)
@@ -578,6 +611,8 @@ namespace bitAudio
                     samples = new ChannelMapperSampleProvider(samples, outputChannels);
                     equalizer = new EqualizerSampleProvider(samples, equalizerGains);
                     samples = equalizer;
+                    noiseGate = new NoiseGateSampleProvider(samples, noiseGateThresholdDb);
+                    samples = noiseGate;
                     processor = new GainLimiterSampleProvider(samples, gain, limiterEnabled);
                     ISampleProvider continuous = new ContinuousSampleProvider(processor);
 
@@ -717,6 +752,7 @@ namespace bitAudio
             captureBuffer = null;
             processor = null;
             equalizer = null;
+            noiseGate = null;
             monitorTap = null;
             monitorBuffer = null;
             trimBuffer = null;

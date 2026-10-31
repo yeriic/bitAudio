@@ -11,6 +11,7 @@ namespace bitAudio
         private const string PromptValueName = "SetupPromptShown";
         private const string MinimizedValueName = "StartMinimized";
         private const string GainValueName = "GainPercent";
+        private const string NoiseGateValueName = "NoiseGateDbOffset";
         private const string LegacySettingsKeyPath = @"Software\AudioBoost";
         private const string LegacyRunValueName = "AudioBoost";
 
@@ -251,6 +252,61 @@ namespace bitAudio
                 if (key != null)
                 {
                     key.SetValue(GainValueName, percent, RegistryValueKind.DWord);
+                }
+            }
+        }
+
+        public static int GetNoiseGateThresholdDb()
+        {
+            using (RegistryKey key = Registry.CurrentUser.OpenSubKey(SettingsKeyPath, false))
+            {
+                if (key == null)
+                {
+                    return -60;
+                }
+
+                object value = key.GetValue(NoiseGateValueName);
+                if (value == null)
+                {
+                    return -60;
+                }
+
+                try
+                {
+                    int offset = Convert.ToInt32(value);
+                    if (offset < 0)
+                    {
+                        offset = 0;
+                    }
+                    if (offset > 80)
+                    {
+                        offset = 80;
+                    }
+                    return offset - 80;
+                }
+                catch (Exception)
+                {
+                    return -60;
+                }
+            }
+        }
+
+        public static void SetNoiseGateThresholdDb(int thresholdDb)
+        {
+            if (thresholdDb < -80)
+            {
+                thresholdDb = -80;
+            }
+            else if (thresholdDb > 0)
+            {
+                thresholdDb = 0;
+            }
+
+            using (RegistryKey key = Registry.CurrentUser.CreateSubKey(SettingsKeyPath))
+            {
+                if (key != null)
+                {
+                    key.SetValue(NoiseGateValueName, thresholdDb + 80, RegistryValueKind.DWord);
                 }
             }
         }

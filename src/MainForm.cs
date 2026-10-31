@@ -64,6 +64,13 @@ namespace bitAudio
         private int eqAnimationStartFormHeight;
         private int eqAnimationEndFormHeight;
         private const int EqTop = 184;
+        private Panel noiseSeparator;
+        private Label noiseTitle;
+        private Label noiseGateValueLabel;
+        private Label noiseLevelLabel;
+        private NoiseGateBar noiseGateBar;
+        private Timer meterTimer;
+        private bool suppressNoiseGateEvents;
 
         private List<AudioDeviceInfo> inputDevices = new List<AudioDeviceInfo>();
         private List<AudioDeviceInfo> outputDevices = new List<AudioDeviceInfo>();
@@ -92,7 +99,7 @@ namespace bitAudio
             Text = "bitAudio";
             StartPosition = FormStartPosition.CenterScreen;
             ClientSize = new Size(900, 560);
-            MinimumSize = new Size(880, 540);
+            MinimumSize = new Size(880, 600);
             BackColor = BackgroundColor;
             ForeColor = TextColor;
             Font = new Font("Segoe UI", 9F);
@@ -118,6 +125,17 @@ namespace bitAudio
             eqAnimationTimer.Interval = 15;
             eqAnimationTimer.Tick += HandleEqAnimationTick;
             eqAnimationWatch = new Stopwatch();
+
+            int savedNoiseGate = StartupManager.GetNoiseGateThresholdDb();
+            suppressNoiseGateEvents = true;
+            noiseGateBar.ValueDb = savedNoiseGate;
+            suppressNoiseGateEvents = false;
+            engine.SetNoiseGateThreshold(savedNoiseGate);
+            noiseGateValueLabel.Text = "Umbral " + savedNoiseGate + " dB";
+
+            meterTimer = new Timer();
+            meterTimer.Interval = 50;
+            meterTimer.Tick += HandleMeterTimer;
 
             engine.StatusChanged += HandleEngineStatus;
             engine.ErrorOccurred += HandleEngineError;
@@ -394,6 +412,41 @@ namespace bitAudio
             limiterCheck.CheckedChanged += HandleLimiterChanged;
             panel.Controls.Add(limiterCheck);
 
+            noiseSeparator = CreateSeparator(20, EqTop + 128, 820);
+            panel.Controls.Add(noiseSeparator);
+
+            noiseTitle = CreateSectionLabel("Cancelación de ruido", 20, EqTop + 140);
+            panel.Controls.Add(noiseTitle);
+
+            noiseGateValueLabel = new Label();
+            noiseGateValueLabel.Text = "Umbral -60 dB";
+            noiseGateValueLabel.Font = new Font("Segoe UI Semibold", 9.5F);
+            noiseGateValueLabel.ForeColor = AccentColor;
+            noiseGateValueLabel.AutoSize = true;
+            noiseGateValueLabel.Location = new Point(240, EqTop + 140);
+            panel.Controls.Add(noiseGateValueLabel);
+
+            noiseLevelLabel = new Label();
+            noiseLevelLabel.Text = "Nivel \u2212\u221E dB";
+            noiseLevelLabel.Font = new Font("Segoe UI Semibold", 9.5F);
+            noiseLevelLabel.ForeColor = MutedColor;
+            noiseLevelLabel.AutoSize = true;
+            noiseLevelLabel.Location = new Point(430, EqTop + 140);
+            panel.Controls.Add(noiseLevelLabel);
+
+            noiseGateBar = new NoiseGateBar();
+            noiseGateBar.Location = new Point(20, EqTop + 168);
+            noiseGateBar.Size = new Size(820, 42);
+            noiseGateBar.MinimumDb = NoiseGateSampleProvider.MinimumThresholdDb;
+            noiseGateBar.MaximumDb = NoiseGateSampleProvider.MaximumThresholdDb;
+            noiseGateBar.BackColor = CardColor;
+            noiseGateBar.AccentColor = AccentColor;
+            noiseGateBar.WarningColor = WarningColor;
+            noiseGateBar.TrackColor = Color.FromArgb(62, 62, 77);
+            noiseGateBar.ThumbColor = Color.FromArgb(242, 243, 248);
+            noiseGateBar.ValueChanged += HandleNoiseGateChanged;
+            panel.Controls.Add(noiseGateBar);
+
             panel.Resize += delegate
             {
                 int width = panel.ClientSize.Width - 40;
@@ -406,6 +459,8 @@ namespace bitAudio
                 eqPanel.Width = width;
                 gainSlider.Width = width;
                 separator.Width = width;
+                noiseSeparator.Width = width;
+                noiseGateBar.Width = width;
             };
 
             return panel;
@@ -435,7 +490,7 @@ namespace bitAudio
             eqClosedClientHeight = ClientSize.Height;
 
             int panelHeight = EqualizerPanel.PanelHeight;
-            int amplificationBottom = EqTop + 84 + limiterCheck.Height;
+            int amplificationBottom = noiseGateBar.Bottom;
             int emptySpace = entradaPanel.ClientSize.Height - amplificationBottom;
             if (emptySpace < 0)
             {
@@ -576,6 +631,26 @@ namespace bitAudio
             if (limiterCheck != null)
             {
                 limiterCheck.Top = EqTop + 84 + offset;
+            }
+            if (noiseSeparator != null)
+            {
+                noiseSeparator.Top = EqTop + 128 + offset;
+            }
+            if (noiseTitle != null)
+            {
+                noiseTitle.Top = EqTop + 140 + offset;
+            }
+            if (noiseGateValueLabel != null)
+            {
+                noiseGateValueLabel.Top = EqTop + 140 + offset;
+            }
+            if (noiseLevelLabel != null)
+            {
+                noiseLevelLabel.Top = EqTop + 140 + offset;
+            }
+            if (noiseGateBar != null)
+            {
+                noiseGateBar.Top = EqTop + 168 + offset;
             }
         }
 
@@ -937,6 +1012,7 @@ namespace bitAudio
             }
 
             syncTimer.Start();
+            meterTimer.Start();
 
             if (startInBackground)
             {
@@ -955,6 +1031,10 @@ namespace bitAudio
 
                 closing = true;
                 syncTimer.Stop();
+                if (meterTimer != null)
+                {
+                    meterTimer.Stop();
+                }
                 if (eqAnimationTimer != null)
                 {
                     eqAnimationTimer.Stop();
@@ -1626,6 +1706,55 @@ namespace bitAudio
 
             gainValueLabel.Text = percent + " %  (" + db + ")";
             gainValueLabel.ForeColor = percent > 100 ? WarningColor : AccentColor;
+        }
+
+        private void HandleMeterTimer(object sender, EventArgs e)
+        {
+            if (closing || noiseGateBar == null)
+            {
+                return;
+            }
+
+            float level = engine.InputLevelDb;
+            noiseGateBar.LevelDb = level;
+            noiseLevelLabel.Text = "Nivel " + FormatNoiseLevel(level);
+
+            if (level <= -89.5f)
+            {
+                noiseLevelLabel.ForeColor = MutedColor;
+            }
+            else
+            {
+                noiseLevelLabel.ForeColor = level >= noiseGateBar.ValueDb ? SuccessColor : WarningColor;
+            }
+        }
+
+        private void HandleNoiseGateChanged(object sender, EventArgs e)
+        {
+            if (suppressNoiseGateEvents)
+            {
+                return;
+            }
+
+            int db = noiseGateBar.ValueDb;
+            engine.SetNoiseGateThreshold(db);
+            try
+            {
+                StartupManager.SetNoiseGateThresholdDb(db);
+            }
+            catch (Exception)
+            {
+            }
+            noiseGateValueLabel.Text = "Umbral " + db + " dB";
+        }
+
+        private static string FormatNoiseLevel(float db)
+        {
+            if (db <= -89.5f)
+            {
+                return "\u2212\u221E dB";
+            }
+            return Math.Round(db).ToString("0") + " dB";
         }
 
         private static string FormatGain(int percent)
