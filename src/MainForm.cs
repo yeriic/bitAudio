@@ -989,16 +989,6 @@ namespace bitAudio
 
                 StartupManager.MarkSetupPromptShown();
             }
-            else
-            {
-                try
-                {
-                    StartupManager.EnsureAutoStartPath(Application.ExecutablePath);
-                }
-                catch (Exception)
-                {
-                }
-            }
 
             RefreshStartupSettingsUi();
 
