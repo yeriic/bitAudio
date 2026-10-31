@@ -26,12 +26,20 @@ if not exist "%CSC%" (
  src\Program.cs ^
  src\MainForm.cs ^
  src\StartupManager.cs ^
+ src\EqProfileStore.cs ^
  src\Audio\AudioDeviceInfo.cs ^
  src\Audio\AudioEngine.cs ^
  src\Audio\GainLimiterSampleProvider.cs ^
  src\Audio\ChannelMapperSampleProvider.cs ^
  src\Audio\ContinuousSampleProvider.cs ^
- src\Controls\SlimSlider.cs
+ src\Audio\EqualizerSampleProvider.cs ^
+ src\Audio\MonitorTapSampleProvider.cs ^
+ src\Audio\NoiseGateSampleProvider.cs ^
+ src\Controls\SlimSlider.cs ^
+ src\Controls\VerticalEqSlider.cs ^
+ src\Controls\EqualizerPanel.cs ^
+ src\Controls\ProfileNameDialog.cs ^
+ src\Controls\NoiseGateBar.cs
 
 if errorlevel 1 (
   echo.

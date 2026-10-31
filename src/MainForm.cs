@@ -33,7 +33,6 @@ namespace bitAudio
         private Button tabEntradaButton;
         private Button tabSalidaButton;
         private Button tabAjustesButton;
-        private Label hintLabel;
         private ComboBox inputCombo;
         private ComboBox destinationCombo;
         private ComboBox outputCombo;
@@ -49,6 +48,29 @@ namespace bitAudio
         private LinkLabel cableLink;
         private NotifyIcon trayIcon;
         private ContextMenuStrip trayMenu;
+        private Button eqButton;
+        private EqualizerPanel eqPanel;
+        private Panel eqShiftSeparator;
+        private Label eqShiftTitle;
+        private Timer eqAnimationTimer;
+        private Stopwatch eqAnimationWatch;
+        private bool eqOpen;
+        private int eqClosedClientHeight;
+        private int eqExtraHeight;
+        private int eqAnimationStartHeight;
+        private int eqAnimationEndHeight;
+        private int eqAnimationStartAmpTop;
+        private int eqAnimationEndAmpTop;
+        private int eqAnimationStartFormHeight;
+        private int eqAnimationEndFormHeight;
+        private const int EqTop = 184;
+        private Panel noiseSeparator;
+        private Label noiseTitle;
+        private Label noiseGateValueLabel;
+        private Label noiseLevelLabel;
+        private NoiseGateBar noiseGateBar;
+        private Timer meterTimer;
+        private bool suppressNoiseGateEvents;
 
         private List<AudioDeviceInfo> inputDevices = new List<AudioDeviceInfo>();
         private List<AudioDeviceInfo> outputDevices = new List<AudioDeviceInfo>();
@@ -77,7 +99,7 @@ namespace bitAudio
             Text = "bitAudio";
             StartPosition = FormStartPosition.CenterScreen;
             ClientSize = new Size(900, 560);
-            MinimumSize = new Size(880, 540);
+            MinimumSize = new Size(880, 600);
             BackColor = BackgroundColor;
             ForeColor = TextColor;
             Font = new Font("Segoe UI", 9F);
@@ -93,6 +115,27 @@ namespace bitAudio
             suppressUiEvents = false;
             engine.Gain = savedGain / 100f;
             UpdateGainDisplay();
+
+            engine.SetEqualizerGains(eqPanel.Gains);
+            eqPanel.GainsChanged += HandleEqGainsChanged;
+            eqPanel.StatusMessage += HandleEqStatusMessage;
+            eqPanel.MonitoringToggleRequested += HandleMonitoringToggleRequested;
+
+            eqAnimationTimer = new Timer();
+            eqAnimationTimer.Interval = 15;
+            eqAnimationTimer.Tick += HandleEqAnimationTick;
+            eqAnimationWatch = new Stopwatch();
+
+            int savedNoiseGate = StartupManager.GetNoiseGateThresholdDb();
+            suppressNoiseGateEvents = true;
+            noiseGateBar.ValueDb = savedNoiseGate;
+            suppressNoiseGateEvents = false;
+            engine.SetNoiseGateThreshold(savedNoiseGate);
+            UpdateNoiseGateThresholdLabel(savedNoiseGate);
+
+            meterTimer = new Timer();
+            meterTimer.Interval = 50;
+            meterTimer.Tick += HandleMeterTimer;
 
             engine.StatusChanged += HandleEngineStatus;
             engine.ErrorOccurred += HandleEngineError;
@@ -315,10 +358,14 @@ namespace bitAudio
             soundButton.Click += HandleSoundClick;
             panel.Controls.Add(soundButton);
 
+            eqButton = CreateButton("EQ", 330, 142, 70, 30);
+            eqButton.Click += delegate { ToggleEqualizer(); };
+            panel.Controls.Add(eqButton);
+
             cableLink = new LinkLabel();
             cableLink.Text = "Instalar VB-CABLE";
             cableLink.AutoSize = true;
-            cableLink.Location = new Point(330, 148);
+            cableLink.Location = new Point(414, 148);
             cableLink.LinkColor = AccentColor;
             cableLink.ActiveLinkColor = TextColor;
             cableLink.VisitedLinkColor = AccentColor;
@@ -328,31 +375,29 @@ namespace bitAudio
             cableLink.LinkClicked += HandleCableLinkClicked;
             panel.Controls.Add(cableLink);
 
-            hintLabel = new Label();
-            hintLabel.Location = new Point(20, 184);
-            hintLabel.Size = new Size(820, 20);
-            hintLabel.Font = new Font("Segoe UI", 9F);
-            hintLabel.ForeColor = MutedColor;
-            hintLabel.TextAlign = ContentAlignment.MiddleLeft;
-            hintLabel.AutoEllipsis = true;
-            hintLabel.Visible = false;
-            panel.Controls.Add(hintLabel);
-
-            Panel separator = CreateSeparator(20, 216, 820);
+            Panel separator = CreateSeparator(20, EqTop, 820);
             panel.Controls.Add(separator);
+            eqShiftSeparator = separator;
 
-            Label boostTitle = CreateSectionLabel("Amplificación", 20, 228);
+            Label boostTitle = CreateSectionLabel("Amplificación", 20, EqTop + 12);
             panel.Controls.Add(boostTitle);
+            eqShiftTitle = boostTitle;
+
+            eqPanel = new EqualizerPanel();
+            eqPanel.Location = new Point(20, EqTop);
+            eqPanel.Size = new Size(820, 0);
+            eqPanel.Visible = false;
+            panel.Controls.Add(eqPanel);
 
             gainValueLabel = new Label();
             gainValueLabel.Text = "100 %  (0.0 dB)";
             gainValueLabel.Font = new Font("Segoe UI Semibold", 10.5F);
             gainValueLabel.ForeColor = AccentColor;
             gainValueLabel.AutoSize = true;
-            gainValueLabel.Location = new Point(196, 228);
+            gainValueLabel.Location = new Point(196, EqTop + 12);
             panel.Controls.Add(gainValueLabel);
 
-            gainSlider = CreateSlider(20, 256, 820, 0, 400, 5, 25);
+            gainSlider = CreateSlider(20, EqTop + 40, 820, 0, 400, 5, 25);
             gainSlider.Value = 100;
             gainSlider.ValueChanged += HandleGainChanged;
             panel.Controls.Add(gainSlider);
@@ -360,12 +405,47 @@ namespace bitAudio
             limiterCheck = new CheckBox();
             limiterCheck.Text = "Limitador de picos";
             limiterCheck.AutoSize = true;
-            limiterCheck.Location = new Point(20, 300);
+            limiterCheck.Location = new Point(20, EqTop + 84);
             limiterCheck.ForeColor = TextColor;
             limiterCheck.BackColor = CardColor;
             limiterCheck.Checked = true;
             limiterCheck.CheckedChanged += HandleLimiterChanged;
             panel.Controls.Add(limiterCheck);
+
+            noiseSeparator = CreateSeparator(20, EqTop + 128, 820);
+            panel.Controls.Add(noiseSeparator);
+
+            noiseTitle = CreateSectionLabel("Reducción de ruido", 20, EqTop + 140);
+            panel.Controls.Add(noiseTitle);
+
+            noiseGateValueLabel = new Label();
+            noiseGateValueLabel.Text = "Apagado";
+            noiseGateValueLabel.Font = new Font("Segoe UI Semibold", 9.5F);
+            noiseGateValueLabel.ForeColor = MutedColor;
+            noiseGateValueLabel.AutoSize = true;
+            noiseGateValueLabel.Location = new Point(240, EqTop + 140);
+            panel.Controls.Add(noiseGateValueLabel);
+
+            noiseLevelLabel = new Label();
+            noiseLevelLabel.Text = "Nivel \u2212\u221E dB";
+            noiseLevelLabel.Font = new Font("Segoe UI Semibold", 9.5F);
+            noiseLevelLabel.ForeColor = MutedColor;
+            noiseLevelLabel.AutoSize = true;
+            noiseLevelLabel.Location = new Point(430, EqTop + 140);
+            panel.Controls.Add(noiseLevelLabel);
+
+            noiseGateBar = new NoiseGateBar();
+            noiseGateBar.Location = new Point(20, EqTop + 168);
+            noiseGateBar.Size = new Size(820, 42);
+            noiseGateBar.MinimumDb = NoiseGateSampleProvider.MinimumThresholdDb;
+            noiseGateBar.MaximumDb = NoiseGateSampleProvider.MaximumThresholdDb;
+            noiseGateBar.BackColor = CardColor;
+            noiseGateBar.AccentColor = AccentColor;
+            noiseGateBar.WarningColor = WarningColor;
+            noiseGateBar.TrackColor = Color.FromArgb(62, 62, 77);
+            noiseGateBar.ThumbColor = Color.FromArgb(242, 243, 248);
+            noiseGateBar.ValueChanged += HandleNoiseGateChanged;
+            panel.Controls.Add(noiseGateBar);
 
             panel.Resize += delegate
             {
@@ -376,12 +456,236 @@ namespace bitAudio
                 }
                 inputCombo.Width = width;
                 destinationCombo.Width = width;
-                hintLabel.Width = width;
+                eqPanel.Width = width;
                 gainSlider.Width = width;
                 separator.Width = width;
+                noiseSeparator.Width = width;
+                noiseGateBar.Width = width;
             };
 
             return panel;
+        }
+
+        private void ToggleEqualizer()
+        {
+            if (eqAnimationTimer == null || eqAnimationTimer.Enabled)
+            {
+                return;
+            }
+
+            if (eqOpen)
+            {
+                CloseEqualizer();
+            }
+            else
+            {
+                OpenEqualizer();
+            }
+        }
+
+        private void OpenEqualizer()
+        {
+            eqOpen = true;
+            UpdateEqButtonAppearance();
+            eqClosedClientHeight = ClientSize.Height;
+
+            int panelHeight = EqualizerPanel.PanelHeight;
+            int amplificationBottom = noiseGateBar.Bottom;
+            int emptySpace = entradaPanel.ClientSize.Height - amplificationBottom;
+            if (emptySpace < 0)
+            {
+                emptySpace = 0;
+            }
+
+            int extra = panelHeight - emptySpace + 12;
+            if (extra < 0)
+            {
+                extra = 0;
+            }
+
+            int nonClientHeight = Height - ClientSize.Height;
+            int maxClientHeight = Screen.FromControl(this).WorkingArea.Height - nonClientHeight - 12;
+            if (eqClosedClientHeight + extra > maxClientHeight)
+            {
+                extra = Math.Max(0, maxClientHeight - eqClosedClientHeight);
+            }
+
+            eqExtraHeight = extra;
+            eqPanel.Visible = true;
+            eqPanel.Height = 0;
+            ShiftAmplification(0);
+            StartEqAnimation(0, panelHeight, 0, panelHeight, eqClosedClientHeight, eqClosedClientHeight + extra);
+        }
+
+        private void CloseEqualizer()
+        {
+            eqOpen = false;
+            UpdateEqButtonAppearance();
+
+            if (eqPanel.IsMonitoring)
+            {
+                try
+                {
+                    engine.StopMonitoring();
+                }
+                catch (Exception)
+                {
+                }
+                eqPanel.SetMonitoringState(false);
+            }
+
+            int startHeight = eqPanel.Height;
+            int targetFormHeight = ClientSize.Height - eqExtraHeight;
+            if (targetFormHeight < 320)
+            {
+                targetFormHeight = 320;
+            }
+
+            StartEqAnimation(startHeight, 0, startHeight, 0, ClientSize.Height, targetFormHeight);
+        }
+
+        private void StartEqAnimation(
+            int startHeight,
+            int endHeight,
+            int startShift,
+            int endShift,
+            int startFormHeight,
+            int endFormHeight)
+        {
+            eqAnimationStartHeight = startHeight;
+            eqAnimationEndHeight = endHeight;
+            eqAnimationStartAmpTop = startShift;
+            eqAnimationEndAmpTop = endShift;
+            eqAnimationStartFormHeight = startFormHeight;
+            eqAnimationEndFormHeight = endFormHeight;
+
+            eqAnimationWatch.Reset();
+            eqAnimationWatch.Start();
+            eqAnimationTimer.Start();
+        }
+
+        private void HandleEqAnimationTick(object sender, EventArgs e)
+        {
+            double progress = (double)eqAnimationWatch.ElapsedMilliseconds / 220.0;
+            if (progress > 1.0)
+            {
+                progress = 1.0;
+            }
+            double eased = 1.0 - Math.Pow(1.0 - progress, 3.0);
+
+            int height = eqAnimationStartHeight + (int)Math.Round((eqAnimationEndHeight - eqAnimationStartHeight) * eased);
+            int shift = eqAnimationStartAmpTop + (int)Math.Round((eqAnimationEndAmpTop - eqAnimationStartAmpTop) * eased);
+            int formHeight = eqAnimationStartFormHeight + (int)Math.Round((eqAnimationEndFormHeight - eqAnimationStartFormHeight) * eased);
+
+            eqPanel.Height = height;
+            ShiftAmplification(shift);
+            if (ClientSize.Height != formHeight)
+            {
+                ClientSize = new Size(ClientSize.Width, formHeight);
+            }
+
+            if (progress < 1.0)
+            {
+                return;
+            }
+
+            eqAnimationTimer.Stop();
+            eqAnimationWatch.Reset();
+
+            if (eqOpen)
+            {
+                eqPanel.Height = EqualizerPanel.PanelHeight;
+                ShiftAmplification(EqualizerPanel.PanelHeight);
+            }
+            else
+            {
+                eqPanel.Visible = false;
+                eqPanel.Height = 0;
+                ShiftAmplification(0);
+            }
+
+            if (ClientSize.Height != eqAnimationEndFormHeight)
+            {
+                ClientSize = new Size(ClientSize.Width, eqAnimationEndFormHeight);
+            }
+        }
+
+        private void ShiftAmplification(int offset)
+        {
+            if (eqShiftSeparator != null)
+            {
+                eqShiftSeparator.Top = EqTop + offset;
+            }
+            if (eqShiftTitle != null)
+            {
+                eqShiftTitle.Top = EqTop + 12 + offset;
+            }
+            if (gainValueLabel != null)
+            {
+                gainValueLabel.Top = EqTop + 12 + offset;
+            }
+            if (gainSlider != null)
+            {
+                gainSlider.Top = EqTop + 40 + offset;
+            }
+            if (limiterCheck != null)
+            {
+                limiterCheck.Top = EqTop + 84 + offset;
+            }
+            if (noiseSeparator != null)
+            {
+                noiseSeparator.Top = EqTop + 128 + offset;
+            }
+            if (noiseTitle != null)
+            {
+                noiseTitle.Top = EqTop + 140 + offset;
+            }
+            if (noiseGateValueLabel != null)
+            {
+                noiseGateValueLabel.Top = EqTop + 140 + offset;
+            }
+            if (noiseLevelLabel != null)
+            {
+                noiseLevelLabel.Top = EqTop + 140 + offset;
+            }
+            if (noiseGateBar != null)
+            {
+                noiseGateBar.Top = EqTop + 168 + offset;
+            }
+        }
+
+        private void UpdateEqButtonAppearance()
+        {
+            if (eqButton == null)
+            {
+                return;
+            }
+
+            if (eqOpen)
+            {
+                eqButton.BackColor = AccentColor;
+                eqButton.ForeColor = Color.FromArgb(16, 34, 34);
+                eqButton.FlatAppearance.BorderColor = AccentColor;
+            }
+            else
+            {
+                eqButton.BackColor = InputColor;
+                eqButton.ForeColor = TextColor;
+                eqButton.FlatAppearance.BorderColor = ButtonBorderColor;
+            }
+        }
+
+        private void HandleEqGainsChanged(object sender, EventArgs e)
+        {
+            if (eqPanel != null)
+            {
+                engine.SetEqualizerGains(eqPanel.Gains);
+            }
+        }
+
+        private void HandleEqStatusMessage(string message)
+        {
+            ShowStatus(message, MutedColor);
         }
 
         private Panel BuildSettingsPanel()
@@ -685,16 +989,6 @@ namespace bitAudio
 
                 StartupManager.MarkSetupPromptShown();
             }
-            else
-            {
-                try
-                {
-                    StartupManager.EnsureAutoStartPath(Application.ExecutablePath);
-                }
-                catch (Exception)
-                {
-                }
-            }
 
             RefreshStartupSettingsUi();
 
@@ -708,6 +1002,7 @@ namespace bitAudio
             }
 
             syncTimer.Start();
+            meterTimer.Start();
 
             if (startInBackground)
             {
@@ -724,16 +1019,28 @@ namespace bitAudio
                 return;
             }
 
-            closing = true;
-            syncTimer.Stop();
-            try
-            {
-                engine.Stop();
-            }
-            catch (Exception)
-            {
-            }
-            engine.Dispose();
+                closing = true;
+                syncTimer.Stop();
+                if (meterTimer != null)
+                {
+                    meterTimer.Stop();
+                }
+                if (eqAnimationTimer != null)
+                {
+                    eqAnimationTimer.Stop();
+                }
+                if (eqPanel != null)
+                {
+                    eqPanel.SaveState();
+                }
+                try
+                {
+                    engine.Stop();
+                }
+                catch (Exception)
+                {
+                }
+                engine.Dispose();
 
             if (trayIcon != null)
             {
@@ -796,6 +1103,18 @@ namespace bitAudio
             if (closing || hidingToTray)
             {
                 return;
+            }
+
+            if (eqPanel != null && eqPanel.IsMonitoring)
+            {
+                try
+                {
+                    engine.StopMonitoring();
+                }
+                catch (Exception)
+                {
+                }
+                eqPanel.SetMonitoringState(false);
             }
 
             hidingToTray = true;
@@ -1105,6 +1424,33 @@ namespace bitAudio
             }
 
             SyncOutputVolume();
+
+            if (engine.IsRunning && eqPanel != null && eqPanel.IsMonitoring)
+            {
+                if (info == null)
+                {
+                    try
+                    {
+                        engine.StopMonitoring();
+                    }
+                    catch (Exception)
+                    {
+                    }
+                    eqPanel.SetMonitoringState(false);
+                }
+                else
+                {
+                    try
+                    {
+                        engine.StartMonitoring(info.Id);
+                    }
+                    catch (Exception exception)
+                    {
+                        eqPanel.SetMonitoringState(false);
+                        ShowStatus("Monitor de micrófono: " + exception.Message, WarningColor);
+                    }
+                }
+            }
         }
 
         private void HandleLimiterChanged(object sender, EventArgs e)
@@ -1122,6 +1468,10 @@ namespace bitAudio
 
             if (input == null)
             {
+                if (eqPanel.IsMonitoring)
+                {
+                    eqPanel.SetMonitoringState(false);
+                }
                 SelectTab(0);
                 ShowStatus("Selecciona tu micrófono.", WarningColor);
                 return;
@@ -1129,6 +1479,10 @@ namespace bitAudio
 
             if (destination == null)
             {
+                if (eqPanel.IsMonitoring)
+                {
+                    eqPanel.SetMonitoringState(false);
+                }
                 SelectTab(0);
                 ShowStatus("No activo.", MutedColor);
                 return;
@@ -1136,6 +1490,10 @@ namespace bitAudio
 
             if (AudioDeviceInfo.IsCableCaptureName(input.Name) && AudioDeviceInfo.IsCableRenderName(destination.Name))
             {
+                if (eqPanel.IsMonitoring)
+                {
+                    eqPanel.SetMonitoringState(false);
+                }
                 ShowStatus("Selecciona un micrófono real, no CABLE Output.", ErrorColor);
                 return;
             }
@@ -1153,10 +1511,74 @@ namespace bitAudio
                     latency);
 
                 UpdateActiveStatus();
+
+                if (eqPanel.IsMonitoring)
+                {
+                    AudioDeviceInfo monitorOutput = outputCombo.SelectedItem as AudioDeviceInfo;
+                    if (monitorOutput == null)
+                    {
+                        eqPanel.SetMonitoringState(false);
+                    }
+                    else
+                    {
+                        try
+                        {
+                            engine.StartMonitoring(monitorOutput.Id);
+                        }
+                        catch (Exception monitorException)
+                        {
+                            eqPanel.SetMonitoringState(false);
+                            ShowStatus("Monitor de micrófono: " + monitorException.Message, WarningColor);
+                        }
+                    }
+                }
             }
             catch (Exception exception)
             {
+                eqPanel.SetMonitoringState(false);
                 ShowStatus("No se pudo iniciar: " + exception.Message, ErrorColor);
+            }
+        }
+
+        private void HandleMonitoringToggleRequested(object sender, EventArgs e)
+        {
+            if (!eqPanel.IsMonitoring)
+            {
+                try
+                {
+                    engine.StopMonitoring();
+                }
+                catch (Exception)
+                {
+                }
+                ShowStatus("Monitor de micrófono apagado.", MutedColor);
+                return;
+            }
+
+            if (!engine.IsRunning)
+            {
+                eqPanel.SetMonitoringState(false);
+                ShowStatus("El monitor necesita el procesamiento activo.", WarningColor);
+                return;
+            }
+
+            AudioDeviceInfo output = outputCombo.SelectedItem as AudioDeviceInfo;
+            if (output == null)
+            {
+                eqPanel.SetMonitoringState(false);
+                ShowStatus("Selecciona una salida en la pestaña Salida.", WarningColor);
+                return;
+            }
+
+            try
+            {
+                engine.StartMonitoring(output.Id);
+                ShowStatus("Escuchando el micrófono procesado. Usa auriculares.", WarningColor);
+            }
+            catch (Exception exception)
+            {
+                eqPanel.SetMonitoringState(false);
+                ShowStatus("No se pudo escuchar el micrófono: " + exception.Message, ErrorColor);
             }
         }
 
@@ -1264,7 +1686,7 @@ namespace bitAudio
             string db;
             if (percent <= 0)
             {
-                db = "−∞ dB";
+                db = "\u2212\u221E dB";
             }
             else
             {
@@ -1274,6 +1696,74 @@ namespace bitAudio
 
             gainValueLabel.Text = percent + " %  (" + db + ")";
             gainValueLabel.ForeColor = percent > 100 ? WarningColor : AccentColor;
+        }
+
+        private void HandleMeterTimer(object sender, EventArgs e)
+        {
+            if (closing || noiseGateBar == null)
+            {
+                return;
+            }
+
+            float level = engine.InputLevelDb;
+            noiseGateBar.LevelDb = level;
+            noiseLevelLabel.Text = "Nivel " + FormatNoiseLevel(level);
+
+            if (level <= -89.5f)
+            {
+                noiseLevelLabel.ForeColor = MutedColor;
+            }
+            else
+            {
+                noiseLevelLabel.ForeColor = level >= noiseGateBar.ValueDb ? SuccessColor : WarningColor;
+            }
+        }
+
+        private void HandleNoiseGateChanged(object sender, EventArgs e)
+        {
+            if (suppressNoiseGateEvents)
+            {
+                return;
+            }
+
+            int db = noiseGateBar.ValueDb;
+            engine.SetNoiseGateThreshold(db);
+            try
+            {
+                StartupManager.SetNoiseGateThresholdDb(db);
+            }
+            catch (Exception)
+            {
+            }
+            UpdateNoiseGateThresholdLabel(db);
+        }
+
+        private void UpdateNoiseGateThresholdLabel(int db)
+        {
+            if (noiseGateValueLabel == null)
+            {
+                return;
+            }
+
+            if (db <= NoiseGateSampleProvider.MinimumThresholdDb)
+            {
+                noiseGateValueLabel.Text = "Apagado";
+                noiseGateValueLabel.ForeColor = MutedColor;
+            }
+            else
+            {
+                noiseGateValueLabel.Text = "Umbral " + db + " dB";
+                noiseGateValueLabel.ForeColor = AccentColor;
+            }
+        }
+
+        private static string FormatNoiseLevel(float db)
+        {
+            if (db <= -89.5f)
+            {
+                return "\u2212\u221E dB";
+            }
+            return Math.Round(db).ToString("0") + " dB";
         }
 
         private static string FormatGain(int percent)
@@ -1351,23 +1841,12 @@ namespace bitAudio
 
         private void UpdateHint()
         {
-            if (hintLabel == null || IsDisposed)
+            if (cableLink == null || IsDisposed)
             {
                 return;
             }
 
-            bool hasDestination = destinationDevices.Count > 0;
-            hintLabel.Visible = !hasDestination;
-            if (cableLink != null)
-            {
-                cableLink.Visible = !hasDestination;
-            }
-
-            if (!hasDestination)
-            {
-                hintLabel.ForeColor = ErrorColor;
-                hintLabel.Text = "⚠ VB-CABLE no detectado.";
-            }
+            cableLink.Visible = destinationDevices.Count == 0;
         }
 
         private static void HandleComboDrawItem(object sender, DrawItemEventArgs e)
@@ -1440,6 +1919,11 @@ namespace bitAudio
             }
             catch (Exception)
             {
+            }
+
+            if (eqPanel != null && eqPanel.IsMonitoring)
+            {
+                eqPanel.SetMonitoringState(false);
             }
 
             ShowStatus(message, ErrorColor);

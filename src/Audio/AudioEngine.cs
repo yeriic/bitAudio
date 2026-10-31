@@ -18,6 +18,15 @@ namespace bitAudio
         private WasapiOut output;
         private BufferedWaveProvider captureBuffer;
         private GainLimiterSampleProvider processor;
+        private EqualizerSampleProvider equalizer;
+        private NoiseGateSampleProvider noiseGate;
+        private volatile int noiseGateThresholdDb = -80;
+        private MonitorTapSampleProvider monitorTap;
+        private BufferedWaveProvider monitorBuffer;
+        private WasapiOut monitorOutput;
+        private MMDevice monitorDevice;
+        private volatile bool monitoring;
+        private readonly float[] equalizerGains = new float[EqualizerSampleProvider.BandCount];
         private MMDevice captureDevice;
         private MMDevice playbackDevice;
 
@@ -74,6 +83,196 @@ namespace bitAudio
                 if (current != null)
                 {
                     current.LimiterEnabled = value;
+                }
+            }
+        }
+
+        public void SetEqualizerGains(float[] gains)
+        {
+            if (gains == null)
+            {
+                return;
+            }
+
+            lock (syncRoot)
+            {
+                int count = Math.Min(gains.Length, equalizerGains.Length);
+                for (int i = 0; i < count; i++)
+                {
+                    equalizerGains[i] = gains[i] < EqualizerSampleProvider.MinimumGainDb
+                        ? EqualizerSampleProvider.MinimumGainDb
+                        : gains[i] > EqualizerSampleProvider.MaximumGainDb
+                            ? EqualizerSampleProvider.MaximumGainDb
+                            : gains[i];
+                }
+
+                EqualizerSampleProvider current = equalizer;
+                if (current != null)
+                {
+                    current.SetGains(equalizerGains);
+                }
+            }
+        }
+
+        public bool IsMonitoring
+        {
+            get { return monitoring; }
+        }
+
+        public float InputLevelDb
+        {
+            get
+            {
+                NoiseGateSampleProvider current = noiseGate;
+                return current != null ? current.LevelDb : -90f;
+            }
+        }
+
+        public void SetNoiseGateThreshold(int thresholdDb)
+        {
+            lock (syncRoot)
+            {
+                if (thresholdDb < NoiseGateSampleProvider.MinimumThresholdDb)
+                {
+                    thresholdDb = NoiseGateSampleProvider.MinimumThresholdDb;
+                }
+                else if (thresholdDb > NoiseGateSampleProvider.MaximumThresholdDb)
+                {
+                    thresholdDb = NoiseGateSampleProvider.MaximumThresholdDb;
+                }
+
+                noiseGateThresholdDb = thresholdDb;
+                NoiseGateSampleProvider current = noiseGate;
+                if (current != null)
+                {
+                    current.SetThreshold(thresholdDb);
+                }
+            }
+        }
+
+        public void StartMonitoring(string outputDeviceId)
+        {
+            lock (syncRoot)
+            {
+                if (!running || monitorTap == null || monitorBuffer == null)
+                {
+                    throw new InvalidOperationException("El procesamiento no está activo.");
+                }
+
+                StopMonitoringInternal();
+
+                MMDevice device = null;
+                WasapiOut newOutput = null;
+
+                try
+                {
+                    device = enumerator.GetDevice(outputDeviceId);
+                    if (device.DataFlow != DataFlow.Render)
+                    {
+                        throw new InvalidOperationException("El dispositivo de monitor no es una salida.");
+                    }
+
+                    monitorBuffer.ClearBuffer();
+                    newOutput = new WasapiOut(device, AudioClientShareMode.Shared, true, 30);
+                    ISampleProvider monitorSamples = new ContinuousSampleProvider(monitorBuffer.ToSampleProvider());
+                    newOutput.Init(monitorSamples.ToWaveProvider());
+
+                    monitorDevice = device;
+                    device = null;
+                    monitorOutput = newOutput;
+                    newOutput = null;
+
+                    monitorTap.Enabled = true;
+                    monitorOutput.Play();
+                    monitoring = true;
+                }
+                catch (Exception)
+                {
+                    if (newOutput != null)
+                    {
+                        try
+                        {
+                            newOutput.Dispose();
+                        }
+                        catch (Exception)
+                        {
+                        }
+                    }
+                    if (device != null)
+                    {
+                        try
+                        {
+                            device.Dispose();
+                        }
+                        catch (Exception)
+                        {
+                        }
+                    }
+                    if (monitorTap != null)
+                    {
+                        monitorTap.Enabled = false;
+                    }
+                    throw;
+                }
+            }
+        }
+
+        public void StopMonitoring()
+        {
+            lock (syncRoot)
+            {
+                StopMonitoringInternal();
+            }
+        }
+
+        private void StopMonitoringInternal()
+        {
+            monitoring = false;
+
+            if (monitorTap != null)
+            {
+                monitorTap.Enabled = false;
+            }
+
+            if (monitorOutput != null)
+            {
+                try
+                {
+                    monitorOutput.Stop();
+                }
+                catch (Exception)
+                {
+                }
+                try
+                {
+                    monitorOutput.Dispose();
+                }
+                catch (Exception)
+                {
+                }
+                monitorOutput = null;
+            }
+
+            if (monitorDevice != null)
+            {
+                try
+                {
+                    monitorDevice.Dispose();
+                }
+                catch (Exception)
+                {
+                }
+                monitorDevice = null;
+            }
+
+            if (monitorBuffer != null)
+            {
+                try
+                {
+                    monitorBuffer.ClearBuffer();
+                }
+                catch (Exception)
+                {
                 }
             }
         }
@@ -410,11 +609,19 @@ namespace bitAudio
                     }
 
                     samples = new ChannelMapperSampleProvider(samples, outputChannels);
+                    equalizer = new EqualizerSampleProvider(samples, equalizerGains);
+                    samples = equalizer;
+                    noiseGate = new NoiseGateSampleProvider(samples, noiseGateThresholdDb);
+                    samples = noiseGate;
                     processor = new GainLimiterSampleProvider(samples, gain, limiterEnabled);
                     ISampleProvider continuous = new ContinuousSampleProvider(processor);
 
                     WaveFormat outputFormat = WaveFormat.CreateIeeeFloatWaveFormat(outputSampleRate, outputChannels);
-                    IWaveProvider waveProvider = continuous.ToWaveProvider();
+                    monitorBuffer = new BufferedWaveProvider(continuous.WaveFormat);
+                    monitorBuffer.BufferDuration = TimeSpan.FromMilliseconds(250);
+                    monitorBuffer.DiscardOnBufferOverflow = true;
+                    monitorTap = new MonitorTapSampleProvider(continuous, monitorBuffer);
+                    IWaveProvider waveProvider = monitorTap.ToWaveProvider();
 
                     output = new WasapiOut(playbackDevice, AudioClientShareMode.Shared, true, latency);
                     output.PlaybackStopped += HandleOutputStopped;
@@ -489,6 +696,8 @@ namespace bitAudio
 
         private void CleanupPipeline()
         {
+            StopMonitoringInternal();
+
             if (capture != null)
             {
                 try
@@ -542,6 +751,10 @@ namespace bitAudio
 
             captureBuffer = null;
             processor = null;
+            equalizer = null;
+            noiseGate = null;
+            monitorTap = null;
+            monitorBuffer = null;
             trimBuffer = null;
         }
 
